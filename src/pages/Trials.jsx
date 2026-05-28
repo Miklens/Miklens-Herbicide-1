@@ -1,4 +1,5 @@
 import React, { useState, useMemo, useRef, useEffect, useCallback } from 'react';
+import QRCodeLib from 'qrcode';
 import { useAppState } from '../hooks/useAppState.jsx';
 import TopBar from '../components/TopBar.jsx';
 import Modal from '../components/Modal.jsx';
@@ -131,6 +132,7 @@ export default function Trials({ onMenuClick }) {
   // --- QR Code ---
   const qrCanvasRef = useRef(null);
   const [qrGenerated, setQrGenerated] = useState(false);
+  const [qrMode, setQrMode] = useState('offline'); // 'offline' | 'online'
 
   // --- AI Summary ---
   const [aiSummary, setAiSummary] = useState('');
@@ -1440,59 +1442,54 @@ export default function Trials({ onMenuClick }) {
   }, [detailEfficacy]);
 
   // ── QR CODE GENERATOR ─────────────────────────────────────────────
-  const generateQR = useCallback(async (trial) => {
+  const buildQrText = useCallback((trial, mode) => {
+    if (mode === 'online') {
+      // Deep-link into the React app's hash router live page
+      const base = window.location.origin + window.location.pathname;
+      return `${base}#/live/${trial.ID}`;
+    }
+    // Offline: compact human-readable text encoding (like HTML app)
+    const fields = state.settings?.qrOfflineFields || ['FormulationName','Dosage','WeedSpecies','Date','Location'];
+    const fmt = (d) => { try { return new Date(d).toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'numeric'}).replace(/ /g,'-'); } catch { return d || ''; } };
+    const lines = [`MIKLENS-TRIAL`];
+    lines.push(`ID:${trial.ID}`);
+    if (fields.includes('FormulationName') && trial.FormulationName) lines.push(`Product:${trial.FormulationName}`);
+    if (fields.includes('InvestigatorName') && trial.InvestigatorName) lines.push(`Inv:${trial.InvestigatorName}`);
+    if (fields.includes('Date') && trial.Date) lines.push(`Date:${fmt(trial.Date)}`);
+    if (fields.includes('Dosage') && trial.Dosage) lines.push(`Dose:${trial.Dosage}`);
+    if (fields.includes('Location') && trial.Location) lines.push(`Loc:${trial.Location}`);
+    if (fields.includes('WeedSpecies') && trial.WeedSpecies) lines.push(`Weeds:${trial.WeedSpecies}`);
+    if (fields.includes('Result') && trial.Result) lines.push(`Result:${trial.Result}`);
+    if (trial.Replication) lines.push(`Rep:${trial.Replication}`);
+    return lines.join('\n');
+  }, [state.settings]);
+
+  const generateQR = useCallback(async (trial, mode) => {
     if (!trial || !qrCanvasRef.current) return;
     setQrGenerated(false);
-    const canvas = qrCanvasRef.current;
-    const ctx = canvas.getContext('2d');
-    const size = 200;
-    canvas.width = size;
-    canvas.height = size;
-    // Build QR data payload
-    const qrFields = state.settings?.qrCodeFields || {};
-    const payload = { ID: trial.ID };
-    if (qrFields.FormulationName !== false) payload.FormulationName = trial.FormulationName;
-    if (qrFields.InvestigatorName !== false) payload.InvestigatorName = trial.InvestigatorName;
-    if (qrFields.Date !== false) payload.Date = trial.Date;
-    if (qrFields.Dosage !== false) payload.Dosage = trial.Dosage;
-    if (qrFields.Location) payload.Location = trial.Location;
-    const qrText = JSON.stringify(payload);
+    const resolvedMode = mode || qrMode;
+    const qrText = buildQrText(trial, resolvedMode);
     try {
-      // Use jsQR-compatible encoding via QRCode library if available, else use canvas text fallback
-      if (window.QRCode) {
-        const div = document.createElement('div');
-        new window.QRCode(div, { text: qrText, width: size, height: size, colorDark: '#1e293b', colorLight: '#ffffff' });
-        setTimeout(() => {
-          const img = div.querySelector('img') || div.querySelector('canvas');
-          if (img) {
-            const tempImg = new window.Image();
-            tempImg.onload = () => { ctx.drawImage(tempImg, 0, 0, size, size); setQrGenerated(true); };
-            tempImg.src = img.src || img.toDataURL();
-          }
-        }, 200);
-      } else {
-        // Fallback: draw a placeholder with the ID text
-        ctx.fillStyle = '#f8fafc';
-        ctx.fillRect(0, 0, size, size);
-        ctx.fillStyle = '#1e293b';
-        ctx.font = 'bold 11px monospace';
-        ctx.textAlign = 'center';
-        ctx.fillText('QR Code', size / 2, size / 2 - 10);
-        ctx.font = '9px monospace';
-        ctx.fillText(trial.ID, size / 2, size / 2 + 10);
-        ctx.fillText('(QRCode.js not loaded)', size / 2, size / 2 + 28);
-        setQrGenerated(true);
-      }
-    } catch (e) { console.error('QR gen error', e); }
-  }, [state.settings, qrCanvasRef]);
+      await QRCodeLib.toCanvas(qrCanvasRef.current, qrText, {
+        width: 220,
+        margin: 2,
+        color: { dark: '#1e293b', light: '#ffffff' },
+        errorCorrectionLevel: 'H'
+      });
+      setQrGenerated(true);
+    } catch (e) {
+      console.error('QR gen error', e);
+      window.dispatchEvent(new CustomEvent('app:toast', { detail: { msg: 'QR generation failed: ' + e.message, type: 'error' } }));
+    }
+  }, [qrMode, buildQrText]);
 
   const downloadQR = useCallback(() => {
     if (!qrCanvasRef.current) return;
     const a = document.createElement('a');
-    a.download = `QR_${detailTrial?.FormulationName || 'trial'}.png`;
+    a.download = `QR_${detailTrial?.FormulationName || 'trial'}_${qrMode}.png`;
     a.href = qrCanvasRef.current.toDataURL('image/png');
     a.click();
-  }, []);
+  }, [detailTrial, qrMode]);
 
   // ── AI SUMMARY GENERATOR ──────────────────────────────────────────
   const generateAiSummary = useCallback(async () => {
@@ -2832,33 +2829,72 @@ Exactly 2 sentences. Follow this structure:
               )}
 
               {/* QR Code Tab */}
-              {detailTab === 'qr' && (
-                <div className="flex flex-col items-center gap-4">
-                  <div className="bg-white border-2 border-slate-200 rounded-2xl p-4 shadow-sm">
-                    <canvas ref={qrCanvasRef} width={200} height={200} className="block" />
+              {detailTab === 'qr' && (() => {
+                const liveUrl = `${window.location.origin}${window.location.pathname}#/live/${detailTrial?.ID}`;
+                const fmtDate = (d) => { try { return new Date(d).toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'numeric'}); } catch { return d||''; } };
+                return (
+                <div className="flex flex-col items-center gap-4 w-full">
+                  {/* Mode picker */}
+                  <div className="flex w-full rounded-xl overflow-hidden border border-slate-200">
+                    {['offline','online'].map(m => (
+                      <button key={m}
+                        onClick={() => { setQrMode(m); setQrGenerated(false); }}
+                        className={`flex-1 py-2 text-sm font-semibold capitalize transition-colors ${
+                          qrMode === m ? 'bg-emerald-600 text-white' : 'bg-white text-slate-500 hover:bg-slate-50'
+                        }`}>
+                        {m === 'offline' ? '📦 Offline QR' : '🌐 Online / Live QR'}
+                      </button>
+                    ))}
                   </div>
+
+                  {/* Canvas */}
+                  <div className="bg-white border-2 border-slate-200 rounded-2xl p-4 shadow-sm">
+                    <canvas ref={qrCanvasRef} className="block" />
+                    {!qrGenerated && (
+                      <div className="w-[220px] h-[220px] flex items-center justify-center text-slate-300 text-xs">
+                        Click Generate to create QR
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Actions */}
                   <div className="flex gap-3">
-                    <button onClick={() => generateQR(detailTrial)} className="flex items-center gap-2 px-4 py-2 bg-emerald-600 text-white rounded-lg text-sm font-semibold hover:bg-emerald-700">
+                    <button onClick={() => generateQR(detailTrial, qrMode)}
+                      className="flex items-center gap-2 px-4 py-2 bg-emerald-600 text-white rounded-lg text-sm font-semibold hover:bg-emerald-700">
                       <QrCode className="w-4 h-4" /> Generate QR
                     </button>
                     {qrGenerated && (
-                      <button onClick={downloadQR} className="flex items-center gap-2 px-4 py-2 bg-slate-100 text-slate-700 rounded-lg text-sm font-semibold hover:bg-slate-200">
-                        <Download className="w-4 h-4" /> Download
+                      <button onClick={downloadQR}
+                        className="flex items-center gap-2 px-4 py-2 bg-slate-100 text-slate-700 rounded-lg text-sm font-semibold hover:bg-slate-200">
+                        <Download className="w-4 h-4" /> Download PNG
                       </button>
                     )}
                   </div>
-                  <div className="w-full bg-slate-50 rounded-xl p-3 text-xs text-slate-600 border">
-                    <p className="font-bold text-slate-700 mb-1">QR Data includes:</p>
-                    <ul className="space-y-0.5">
-                      <li>• Trial ID: <span className="font-mono">{detailTrial?.ID}</span></li>
-                      <li>• Formulation: {detailTrial?.FormulationName}</li>
-                      <li>• Date: {detailTrial?.Date}</li>
-                      <li>• Dosage: {detailTrial?.Dosage || 'N/A'}</li>
-                    </ul>
-                    <p className="mt-2 text-slate-400">Scan with Plot Scanner to instantly access this trial in the field.</p>
-                  </div>
+
+                  {/* Info panel */}
+                  {qrMode === 'offline' ? (
+                    <div className="w-full bg-slate-50 rounded-xl p-4 text-xs text-slate-600 border space-y-1">
+                      <p className="font-bold text-slate-700 mb-2">📦 Offline QR — encoded data:</p>
+                      <p><span className="font-semibold text-slate-500">Trial ID:</span> <span className="font-mono">{detailTrial?.ID}</span></p>
+                      <p><span className="font-semibold text-slate-500">Product:</span> {detailTrial?.FormulationName}</p>
+                      <p><span className="font-semibold text-slate-500">Date:</span> {fmtDate(detailTrial?.Date)}</p>
+                      <p><span className="font-semibold text-slate-500">Dosage:</span> {detailTrial?.Dosage || '—'}</p>
+                      <p><span className="font-semibold text-slate-500">Location:</span> {detailTrial?.Location || '—'}</p>
+                      <p><span className="font-semibold text-slate-500">Weeds:</span> {detailTrial?.WeedSpecies || '—'}</p>
+                      <p><span className="font-semibold text-slate-500">Replication:</span> {detailTrial?.Replication || '—'}</p>
+                      <p className="mt-2 text-slate-400">Works without internet. Scan with Plot Scanner to open this trial.</p>
+                    </div>
+                  ) : (
+                    <div className="w-full bg-blue-50 rounded-xl p-4 text-xs text-blue-800 border border-blue-200 space-y-2">
+                      <p className="font-bold text-blue-700 mb-1">🌐 Online / Live QR — links to:</p>
+                      <p className="font-mono break-all text-blue-600 bg-blue-100 rounded p-2">{liveUrl}</p>
+                      <p>Anyone with this QR can view live trial data (product, observations, photos, efficacy) directly from Firebase — no login required.</p>
+                      <p className="text-blue-500">Share this QR on field plot stakes, reports, or with stakeholders.</p>
+                    </div>
+                  )}
                 </div>
-              )}
+                );
+              })()}
 
               {/* AI Summary Tab */}
               {detailTab === 'ai' && (() => {

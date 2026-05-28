@@ -34,6 +34,7 @@ import { getAllData } from './services/dataLayer.js';
 import CompareTrials from './pages/CompareTrials.jsx';
 import Dashboard from './pages/Dashboard.jsx';
 import PlaceholderPage from './pages/PlaceholderPage.jsx';
+import LiveTrialPage from './pages/LiveTrialPage.jsx';
 
 
 
@@ -197,7 +198,12 @@ function App() {
   return (
     <AppStateProvider>
       <HashRouter>
-        <WebPlatformAdapter><AppLayout /></WebPlatformAdapter>
+        <Routes>
+          {/* Public live QR page — no auth required */}
+          <Route path="/live/:id" element={<LiveTrialPage />} />
+          {/* All authenticated app routes */}
+          <Route path="/*" element={<WebPlatformAdapter><AppLayout /></WebPlatformAdapter>} />
+        </Routes>
       </HashRouter>
     </AppStateProvider>
   );
