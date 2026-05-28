@@ -726,23 +726,52 @@ export default function Trials({ onMenuClick }) {
       const pDate = new Date(photoDate);
       const daa = Math.max(0, Math.round((pDate.getTime() - trialDate.getTime()) / (1000 * 60 * 60 * 24)));
 
-      // Auto-fetch weather for the trial's GPS location
-      if (activeTrial?.Lat && activeTrial?.Lon) {
+      // Auto-fetch weather — always attempt, using stored GPS or browser location
+      const fetchWeatherForPhoto = async (lat, lon) => {
         try {
-          const wUrl = `https://api.open-meteo.com/v1/forecast?latitude=${activeTrial.Lat}&longitude=${activeTrial.Lon}&current=temperature_2m,relative_humidity_2m,wind_speed_10m,precipitation&wind_speed_unit=kmh`;
+          // Use historical hourly data if photoDate is in the past, otherwise current
+          const today = new Date().toISOString().split('T')[0];
+          let wUrl;
+          if (photoDate < today) {
+            wUrl = `https://archive-api.open-meteo.com/v1/archive?latitude=${lat}&longitude=${lon}&start_date=${photoDate}&end_date=${photoDate}&hourly=temperature_2m,relative_humidity_2m,wind_speed_10m,precipitation&wind_speed_unit=kmh`;
+          } else {
+            wUrl = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current=temperature_2m,relative_humidity_2m,wind_speed_10m,precipitation&wind_speed_unit=kmh`;
+          }
           const wr = await fetch(wUrl);
           const wd = await wr.json();
-          const wc = wd.current;
-          if (wc) {
+          let temp, hum, wind, rain;
+          if (photoDate < today && wd.hourly) {
+            const midday = wd.hourly.time?.findIndex(t => t.includes('T12:')) ?? 6;
+            const idx = midday >= 0 ? midday : 6;
+            temp = wd.hourly.temperature_2m?.[idx];
+            hum = wd.hourly.relative_humidity_2m?.[idx];
+            wind = wd.hourly.wind_speed_10m?.[idx];
+            rain = wd.hourly.precipitation?.[idx];
+          } else if (wd.current) {
+            temp = wd.current.temperature_2m;
+            hum = wd.current.relative_humidity_2m;
+            wind = wd.current.wind_speed_10m;
+            rain = wd.current.precipitation;
+          }
+          if (temp != null) {
             setObsForm(prev => ({ ...prev,
-              weatherTemp: wc.temperature_2m ?? prev.weatherTemp,
-              weatherHumidity: wc.relative_humidity_2m ?? prev.weatherHumidity,
-              weatherWind: wc.wind_speed_10m ?? prev.weatherWind,
-              weatherRain: wc.precipitation ?? prev.weatherRain,
+              weatherTemp: temp ?? prev.weatherTemp,
+              weatherHumidity: hum ?? prev.weatherHumidity,
+              weatherWind: wind ?? prev.weatherWind,
+              weatherRain: rain ?? prev.weatherRain,
             }));
-            window.dispatchEvent(new CustomEvent('app:toast', { detail: { msg: `Weather fetched: ${wc.temperature_2m}°C, wind ${wc.wind_speed_10m} km/h`, type: 'info' } }));
+            window.dispatchEvent(new CustomEvent('app:toast', { detail: { msg: `Weather (${photoDate}): ${temp}°C, wind ${wind} km/h`, type: 'info' } }));
           }
         } catch(we) { console.warn('Weather fetch failed:', we.message); }
+      };
+
+      if (activeTrial?.Lat && activeTrial?.Lon) {
+        await fetchWeatherForPhoto(activeTrial.Lat, activeTrial.Lon);
+      } else if (navigator.geolocation) {
+        navigator.geolocation.getCurrentPosition(
+          pos => fetchWeatherForPhoto(pos.coords.latitude.toFixed(6), pos.coords.longitude.toFixed(6)),
+          () => console.warn('Geolocation denied — weather not fetched')
+        );
       }
 
       const result = await analyzePhoto(dataUrl, {
@@ -1303,10 +1332,11 @@ export default function Trials({ onMenuClick }) {
   }, [duplicateModal, duplicateFormulation, formulations, trials, getAppState, updateState]);
 
   const handleQuickRate = useCallback(async (trial, rating) => {
-    const updated = { ...trial, Result: rating };
+    const newRating = trial.Result === rating ? '' : rating;
+    const updated = { ...trial, Result: newRating };
     updateState({ trials: trials.map(t => t.ID === updated.ID ? updated : t) });
-    try { await updateTrial({ ID: updated.ID, Result: rating }, getAppState); } catch(e) {}
-    window.dispatchEvent(new CustomEvent('app:toast', { detail: { msg: `Rated "${rating}"`, type: 'success' } }));
+    try { await updateTrial({ ID: updated.ID, Result: newRating }, getAppState); } catch(e) {}
+    window.dispatchEvent(new CustomEvent('app:toast', { detail: { msg: newRating ? `Rated "${newRating}"` : 'Rating cleared', type: 'success' } }));
   }, [trials, getAppState, updateState]);
 
   const handleMarkComplete = useCallback(async (trial) => {
@@ -1331,10 +1361,29 @@ export default function Trials({ onMenuClick }) {
   }, []);
 
   const handleActivateToggle = useCallback(async (trial) => {
-    const updated = { ...trial, IsLive: String(trial.IsLive) !== 'false' ? false : true };
+    const isCurrentlyLive = String(trial.IsLive) !== 'false';
+    const patch = isCurrentlyLive
+      ? { IsLive: false }
+      : { IsLive: true, IsCompleted: false, FinalizationDate: '', FinalControlDuration: '' };
+    const updated = { ...trial, ...patch };
     updateState({ trials: trials.map(t => t.ID === updated.ID ? updated : t) });
-    try { await updateTrial({ ID: updated.ID, IsLive: updated.IsLive }, getAppState); } catch(e) {}
-  }, [trials, updateState, getAppState]);
+    if (activeTrial?.ID === updated.ID) setActiveTrial(updated);
+    try { await updateTrial({ ID: updated.ID, ...patch }, getAppState); } catch(e) {}
+    if (!isCurrentlyLive) window.dispatchEvent(new CustomEvent('app:toast', { detail: { msg: 'Trial reactivated — control days reset', type: 'success' } }));
+  }, [trials, activeTrial, updateState, getAppState]);
+
+  const handleEditControlDays = useCallback(async (trial) => {
+    const current = trial.FinalControlDuration || String(Math.max(0, Math.round((new Date() - new Date(trial.Date || Date.now())) / 86400000)));
+    const val = window.prompt(`Edit control days for "${trial.FormulationName}":`, current);
+    if (val === null || val.trim() === '') return;
+    const days = parseInt(val.trim(), 10);
+    if (isNaN(days) || days < 0) { window.dispatchEvent(new CustomEvent('app:toast', { detail: { msg: 'Invalid number', type: 'error' } })); return; }
+    const updated = { ...trial, FinalControlDuration: String(days) };
+    updateState({ trials: trials.map(t => t.ID === updated.ID ? updated : t) });
+    if (activeTrial?.ID === updated.ID) setActiveTrial(updated);
+    try { await updateTrial({ ID: updated.ID, FinalControlDuration: String(days) }, getAppState); } catch(e) {}
+    window.dispatchEvent(new CustomEvent('app:toast', { detail: { msg: `Control days set to ${days}`, type: 'success' } }));
+  }, [trials, activeTrial, updateState, getAppState]);
 
   // Memoized project lookup for TrialCard
   const projectMap = useMemo(() => {
@@ -1667,6 +1716,7 @@ Write a professional, concise narrative summary.`;
                   onQuickRate={handleQuickRate}
                   onQuickPhoto={handleQuickPhoto}
                   onMarkComplete={handleMarkComplete}
+                  onEditControlDays={handleEditControlDays}
                 />
               ))}
             </div>

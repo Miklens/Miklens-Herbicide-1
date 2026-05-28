@@ -1,5 +1,5 @@
 import React, { memo, useMemo, useCallback } from 'react';
-import { Calendar, MapPin, FlaskConical, Activity, Image, ChevronRight, Edit, MoreVertical, Eye, Copy, FolderOpen, FileDown, ScanLine, MonitorPlay, Archive, FileCode, FileSpreadsheet, Share2, BrainCircuit, Trash2, Camera, CheckCircle, Clock } from 'lucide-react';
+import { Calendar, MapPin, FlaskConical, Activity, Image, ChevronRight, Edit, MoreVertical, Eye, Copy, FolderOpen, FileDown, ScanLine, MonitorPlay, Archive, FileCode, FileSpreadsheet, Share2, BrainCircuit, Trash2, Camera, CheckCircle, Clock, Pencil } from 'lucide-react';
 import { safeJsonParse } from '../utils/helpers.js';
 
 const RESULT_COLORS = {
@@ -44,6 +44,7 @@ const TrialCard = memo(function TrialCard({
   onQuickRate,
   onQuickPhoto,
   onMarkComplete,
+  onEditControlDays,
 }) {
   const photos = useMemo(() => safeJsonParse(trial.PhotoURLs, []), [trial.PhotoURLs]);
   const efficacyData = useMemo(() => safeJsonParse(trial.EfficacyDataJSON, []), [trial.EfficacyDataJSON]);
@@ -157,6 +158,11 @@ const TrialCard = memo(function TrialCard({
     onMarkComplete && onMarkComplete(trial);
   }, [onMarkComplete, trial]);
 
+  const handleEditControlDays = useCallback((e) => {
+    e.stopPropagation();
+    onEditControlDays && onEditControlDays(trial);
+  }, [onEditControlDays, trial]);
+
   const stopPropagation = useCallback((e) => e.stopPropagation(), []);
 
   return (
@@ -252,11 +258,14 @@ const TrialCard = memo(function TrialCard({
           <div className="flex items-center gap-1.5"><FlaskConical className="w-3.5 h-3.5 shrink-0" /><span className="truncate">{trial.Dosage || '—'}</span></div>
           {trial.WeedSpecies && <div className="flex items-center gap-1.5"><Activity className="w-3.5 h-3.5 shrink-0" /><span className="truncate">{trial.WeedSpecies}</span></div>}
           {controlDays !== null && (
-            <div className="flex items-center gap-1.5">
+            <div className="flex items-center gap-1.5" onClick={stopPropagation}>
               <Clock className="w-3.5 h-3.5 shrink-0" />
               <span className={isCompleted ? 'text-emerald-600 font-semibold' : 'text-blue-600 font-semibold'}>
                 {controlDays}d control{isCompleted ? ' (finalized)' : ''}
               </span>
+              <button onClick={handleEditControlDays} title="Edit control days" className="text-slate-300 hover:text-slate-600 transition">
+                <Pencil className="w-3 h-3" />
+              </button>
             </div>
           )}
         </div>
@@ -266,15 +275,21 @@ const TrialCard = memo(function TrialCard({
           <span className="text-[10px] text-slate-400 mr-0.5">Rate:</span>
           {[['Excellent','bg-emerald-500'],['Good','bg-blue-500'],['Fair','bg-amber-500'],['Poor','bg-red-500']].map(([r, col]) => (
             <button key={r} onClick={e => handleQuickRate(e, r)}
-              title={r}
+              title={trial.Result === r ? `${r} — tap to clear` : r}
               className={`text-[9px] font-bold px-1.5 py-0.5 rounded transition ${
                 trial.Result === r
-                  ? `${col} text-white`
+                  ? `${col} text-white ring-2 ring-offset-1 ring-current`
                   : 'bg-slate-100 text-slate-500 hover:bg-slate-200'
               }`}>
               {r[0]}
             </button>
           ))}
+          {trial.Result && (
+            <button onClick={e => handleQuickRate(e, trial.Result)} title="Clear rating"
+              className="text-[9px] text-slate-400 hover:text-red-500 ml-0.5 transition">
+              ×
+            </button>
+          )}
         </div>
 
         <div className="mt-3 flex items-center gap-2 flex-wrap">
