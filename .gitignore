@@ -1,4 +1,5 @@
 # Local-only secrets (never commit)
+.env
 .env.local
 .env.*.local
 
