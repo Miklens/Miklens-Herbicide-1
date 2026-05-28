@@ -357,33 +357,76 @@ export default function Trials({ onMenuClick }) {
     });
   }, []);
 
-  const detectWeedCoverAI = useCallback(async (imageDataUrl) => {
+  const detectWeedCoverAI = useCallback(async (imageUrl) => {
     setDetectingCover(true);
     setCoverDetectResult(null);
     try {
-      const pixelResult = await analyzeWeedCoverFromPixels(imageDataUrl);
-      // Try Gemini vision for better accuracy
       const apiKey = state.settings?.geminiApiKey || (state.settings?.geminiApiKeys || state.settings?.apiKeys || [])[0];
+
+      // Extract Drive file ID if this is a Google Drive URL
+      const driveMatch = typeof imageUrl === 'string' && imageUrl.match(/drive\.google\.com\/(?:file\/d\/|open\?id=|uc\?(?:export=download&)?id=|thumbnail\?(?:[^&]*&)?id=)([a-zA-Z0-9_-]+)/);
+      const driveFileId = driveMatch ? driveMatch[1] : null;
+
+      if (driveFileId) {
+        // Drive URL — canvas pixel analysis is CORS-blocked, use Gemini fileUri only
+        if (!apiKey) {
+          window.dispatchEvent(new CustomEvent('app:toast', { detail: { msg: 'Add a Gemini API key in Settings to analyse Drive photos', type: 'warning' } }));
+          setDetectingCover(false);
+          return null;
+        }
+        const fileUri = `https://drive.google.com/uc?export=download&id=${driveFileId}`;
+        const resp = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key=${apiKey}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ contents: [{ parts: [
+            { text: 'Analyze this field plot image. Estimate the percentage (0-100) of ground covered by weeds (both green and brown/burnt). Respond with ONLY a number like "45".' },
+            { fileData: { mimeType: 'image/jpeg', fileUri } }
+          ]}] })
+        });
+        const d = await resp.json();
+        const txt = d?.candidates?.[0]?.content?.parts?.[0]?.text || '';
+        const m2 = txt.match(/\d+/);
+        if (m2) {
+          const cover = Math.min(100, Math.max(0, parseInt(m2[0])));
+          const result = { cover, confidence: 85, source: 'AI (Gemini)', greenPct: null, brownPct: null };
+          setCoverDetectResult(result);
+          return result;
+        }
+        throw new Error('Gemini did not return a cover percentage');
+      }
+
+      // Local data URL or regular remote URL — run pixel analysis first
+      let dataUrl = imageUrl;
+      if (typeof imageUrl === 'string' && !imageUrl.startsWith('data:')) {
+        // Fetch remote URL to data URL so pixel analysis works
+        const blob = await fetch(imageUrl, { mode: 'cors' }).then(r => r.blob());
+        dataUrl = await new Promise((res, rej) => { const fr = new FileReader(); fr.onloadend = () => res(fr.result); fr.onerror = rej; fr.readAsDataURL(blob); });
+      }
+
+      const pixelResult = await analyzeWeedCoverFromPixels(dataUrl);
+
       if (apiKey) {
         try {
-          const mimeType = imageDataUrl.split(';')[0].split(':')[1];
-          const base64 = imageDataUrl.split(',')[1];
-          const resp = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key=${apiKey}`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ contents: [{ parts: [
-              { text: 'Analyze this field plot image. Estimate the percentage (0-100) of ground covered by weeds (both green and brown/burnt). Respond with ONLY a number like "45".' },
-              { inlineData: { mimeType, data: base64 } }
-            ]}] })
-          });
-          const d = await resp.json();
-          const txt = d?.candidates?.[0]?.content?.parts?.[0]?.text || '';
-          const m = txt.match(/\d+/);
-          if (m) {
-            const cover = Math.min(100, Math.max(0, parseInt(m[0])));
-            const result = { cover, confidence: 90, source: 'AI (Gemini)', greenPct: pixelResult.greenPct, brownPct: pixelResult.brownPct };
-            setCoverDetectResult(result);
-            return result;
+          const mimeType = dataUrl.split(';')[0].split(':')[1] || 'image/jpeg';
+          const base64 = dataUrl.split(',')[1];
+          if (base64) {
+            const resp = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key=${apiKey}`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ contents: [{ parts: [
+                { text: 'Analyze this field plot image. Estimate the percentage (0-100) of ground covered by weeds (both green and brown/burnt). Respond with ONLY a number like "45".' },
+                { inlineData: { mimeType, data: base64 } }
+              ]}] })
+            });
+            const d = await resp.json();
+            const txt = d?.candidates?.[0]?.content?.parts?.[0]?.text || '';
+            const m2 = txt.match(/\d+/);
+            if (m2) {
+              const cover = Math.min(100, Math.max(0, parseInt(m2[0])));
+              const result = { cover, confidence: 90, source: 'AI (Gemini)', greenPct: pixelResult.greenPct, brownPct: pixelResult.brownPct };
+              setCoverDetectResult(result);
+              return result;
+            }
           }
         } catch(aiErr) {
           console.warn('Gemini vision failed, using pixel fallback:', aiErr.message);
