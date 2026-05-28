@@ -329,5 +329,24 @@ export async function clearSmartEmbeddings(payload, getAppState) {
   return sheetDB.clearSmartEmbeddings(payload, getAppState);
 }
 
+// ─── Photo Upload ─────────────────────────────────────────────────────────────
+// Drive is ALWAYS the photo store regardless of Firebase mode.
+// The Apps Script handles folder creation/navigation and returns a Drive URL.
+// If no scriptUrl is configured (Firebase-only setup with no Sheet), fall back
+// to storing base64 inline so the photo is never silently dropped.
+
+export async function uploadPhoto(payload, getAppState) {
+  const state = getAppState ? getAppState() : {};
+  const hasScript = !!(state?.settings?.scriptUrl);
+
+  if (hasScript) {
+    return sheetDB.apiCall('uploadPhoto', payload, false, getAppState);
+  }
+
+  // No Apps Script configured — return inline base64 so caller can store it
+  console.warn('[uploadPhoto] No scriptUrl configured. Storing photo inline (no Drive upload).');
+  return { url: null, fileData: payload.fileData, _inline: true };
+}
+
 // ─── Re-export apiCall for anything that still needs raw access ───────────────
 export { apiCall } from './db.js';

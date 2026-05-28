@@ -2,8 +2,7 @@ import React, { useState, useMemo, useRef, useEffect, useCallback } from 'react'
 import { useAppState } from '../hooks/useAppState.jsx';
 import TopBar from '../components/TopBar.jsx';
 import Modal from '../components/Modal.jsx';
-import { addTrial, deleteTrial, updateTrial } from '../services/dataLayer.js';
-import { apiCall } from '../services/db.js';
+import { addTrial, deleteTrial, updateTrial, uploadPhoto } from '../services/dataLayer.js';
 import {
   Plus, Trash2, Edit, Copy, ChevronRight, Activity, MapPin, Calendar,
   CheckCircle, Camera, Grid, Info, Sparkles, Search, Filter, X,
@@ -671,8 +670,8 @@ export default function Trials({ onMenuClick }) {
     window.dispatchEvent(new CustomEvent('app:toast', { detail: { msg: `Uploading to Drive (${projectName} / ${trialNameWithDate})...`, type: 'info' } }));
 
     try {
-      // 1. Upload photo to Google Drive — this is the critical step the React app was missing
-      const uploadResult = await apiCall('uploadPhoto', {
+      // 1. Upload photo to Google Drive via dataLayer (works in Firebase + Sheet modes)
+      const uploadResult = await uploadPhoto({
         trialId: activeTrial.ID,
         fileData: dataUrl,
         mimeType: 'image/jpeg',
@@ -681,7 +680,7 @@ export default function Trials({ onMenuClick }) {
         label: photoEntry.label,
         date: photoDate,
         folderPath,
-      }, false, getAppState);
+      }, getAppState);
 
       if (uploadResult?._errType) throw new Error(uploadResult.message || 'Drive upload failed');
 
