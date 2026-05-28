@@ -1527,6 +1527,26 @@ export default function Trials({ onMenuClick }) {
         ? parseInt(detailTrial.FinalControlDuration, 10)
         : (detailTrial.Date ? Math.max(0, Math.round((new Date() - new Date(detailTrial.Date)) / 86400000)) : null);
 
+      // Build per-species trajectory for the AI
+      const speciesMap = {};
+      sorted.forEach(o => {
+        (o.weedDetails || []).forEach(wd => {
+          if (!wd.species) return;
+          if (!speciesMap[wd.species]) speciesMap[wd.species] = [];
+          speciesMap[wd.species].push({ daa: o.daa, cover: wd.cover ?? o.weedCover ?? 0, status: wd.status || '' });
+        });
+      });
+      const speciesAnalysis = Object.entries(speciesMap).map(([sp, pts]) => {
+        const spSorted = pts.sort((a, b) => a.daa - b.daa);
+        const spInit = spSorted[0]?.cover ?? 0;
+        const spFinal = spSorted[spSorted.length - 1]?.cover ?? 0;
+        const spMin = Math.min(...spSorted.map(p => p.cover));
+        const spMinDaa = spSorted.find(p => p.cover === spMin)?.daa ?? 0;
+        const spWce = spInit > 0 ? Math.max(0, ((spInit - spFinal) / spInit) * 100).toFixed(1) : '0';
+        const trajectory = spSorted.map(p => `DAA${p.daa}:${p.cover}%`).join(' → ');
+        return `  ${sp}: ${trajectory} | WCE ${spWce}% | Best suppression ${spMin}% at DAA${spMinDaa} | Final ${spFinal}%`;
+      }).join('\n') || '  No per-species data recorded.';
+
       const prompt = `You are a senior agronomist writing a professional trial narrative for a herbicide field trial report.
 
 TRIAL DATA:
@@ -1534,29 +1554,44 @@ TRIAL DATA:
 - Application date: ${detailTrial.Date || 'N/A'}, Location: ${detailTrial.Location || 'N/A'}
 - Dosage: ${detailTrial.Dosage || 'N/A'}
 - Target weeds: ${detailTrial.WeedSpecies || 'Not specified'}
-- Control days tracked: ${controlDaysVal != null ? controlDaysVal + ' days' : 'Not finalized'}
+- Control days tracked: ${controlDaysVal != null ? controlDaysVal + ' days' : 'Ongoing'}
 - Trial status: ${(detailTrial.IsCompleted === true || detailTrial.IsCompleted === 'true') ? 'Completed/Finalized' : 'Ongoing'}
 - Rated result: ${detailTrial.Result || 'Not yet rated'}
-- Weed Control Efficiency (WCE): ${wce.toFixed(1)}% (initial ${baseCover}% → final ${finalCover}%)
-- Minimum cover achieved: ${minObs.weedCover ?? '?'}% at DAA ${minObs.daa ?? '?'}
+- Overall WCE: ${wce.toFixed(1)}% (initial ${baseCover}% → final ${finalCover}%)
+- Best overall suppression: ${minObs.weedCover ?? '?'}% at DAA ${minObs.daa ?? '?'}
 
-OBSERVATION TIMELINE (Days After Application → weed cover %):
+FULL OBSERVATION TIMELINE (Days After Application → total weed cover %):
 ${obsLines || '  No observations recorded yet.'}
 
-INDUSTRY CONTEXT:
-- In herbicide trials, ≥85% WCE over 30+ days = Excellent control, 70-84% = Good, 50-69% = Fair, <50% = Poor.
-- Control lasting 30+ days is commercially effective; 60+ days is high-performance; 90+ days is exceptional.
-- If cover increases at later DAAs, regrowth or re-infestation is occurring.
-- A product that achieves <50% WCE or shows major regrowth by 30 DAA is considered inadequate.
+PER-SPECIES BREAKDOWN:
+${speciesAnalysis}
 
-TASK: Write a 4-6 sentence professional agronomic narrative that:
-1. States what was applied, where, and against which weeds.
-2. Describes the weed control trajectory across ALL observation points (not just first and last) — note any knockdown phase, minimum cover point, and any regrowth trend.
-3. Interprets the control duration in industry terms (e.g. "provided 45 days of effective control before regrowth" or "maintained suppression beyond 60 DAA").
-4. Gives an honest agronomic conclusion — if control is poor after 30+ days, say so explicitly; if excellent, confirm it.
-5. Makes a brief practical recommendation (continue, adjust rate, consider tank-mix, etc.).
+HERBICIDE CONTROL DURATION BENCHMARKS (use these exact thresholds):
+- ≤7 days of effective suppression = POOR (unacceptable, product failed)
+- 8–17 days = FAIR (marginal, short-residual, may need reapplication)
+- 18–27 days = GOOD (commercially acceptable for most situations)
+- 28+ days = EXCELLENT (strong residual control, high-performance product)
+- "Effective suppression" means cover stayed below 30% of initial level before significant regrowth.
+- If cover INCREASES at later DAAs after an initial drop, regrowth is occurring — note the regrowth DAA.
+- If cover never drops meaningfully (<20% reduction), the product had NO effective control on that species.
 
-Do NOT just restate the raw numbers — interpret what they mean agronomically. Write in third person, past tense for completed trials.`;
+TASK: Write a structured professional trial narrative with these sections:
+
+**1. Application & Setup (1 sentence):** What was applied, dosage, date, location, target weeds.
+
+**2. Overall Efficacy Trajectory (2-3 sentences):** Describe the total cover trend across ALL observation points — initial knockdown phase, when minimum cover was reached, and whether regrowth occurred and at what DAA.
+
+**3. Per-Species Performance (1-2 sentences per species):** For EACH species in the per-species breakdown:
+   - State whether the product effectively controlled this species or not.
+   - If controlled: at what DAA cover was minimised, how long suppression lasted.
+   - If NOT controlled or regrowth occurred: say so explicitly (e.g. "showed initial knockdown but regrew to X% by DAA Y" or "demonstrated no meaningful control").
+   - Identify which species responded BEST and which responded WORST.
+
+**4. Control Duration Assessment (1-2 sentences):** Based on the benchmarks above, rate the overall control duration as Poor/Fair/Good/Excellent and explain WHY using the actual DAA numbers.
+
+**5. Recommendation (1 sentence):** A practical agronomic recommendation based on the data (e.g. adjust rate, add tank-mix partner for resistant species, suitable for broad-spectrum use, etc.).
+
+Be direct and honest — do not soften poor results. Write in third person. Use the benchmark thresholds strictly.`;
 
       // Use first available Gemini model (try 2.5-flash as reliable stable model)
       const model = 'gemini-2.5-flash';
