@@ -2079,14 +2079,23 @@ Write a professional, concise narrative summary.`;
                   {detailPhotos.length > 0 ? (
                     <div className="grid grid-cols-2 gap-3">
                       {detailPhotos.map((photo, idx) => {
-                        const src = photo.url || photo.fileData || (typeof photo === 'string' ? photo : null);
-                        if (!src) return null;
+                        const rawSrc = photo.fileData || photo.url || (typeof photo === 'string' ? photo : null);
+                        if (!rawSrc) return null;
+                        const driveMatch = typeof rawSrc === 'string' && rawSrc.match(/drive\.google\.com\/(?:file\/d\/|open\?id=|uc\?id=)([a-zA-Z0-9_-]+)/);
+                        const src = driveMatch
+                          ? `https://drive.google.com/thumbnail?id=${driveMatch[1]}&sz=w400`
+                          : rawSrc;
                         return (
                           <div key={idx} className="rounded-xl overflow-hidden bg-slate-100 border border-slate-200 flex flex-col">
                             <div className="relative">
-                              <img src={src} alt={`Photo ${idx + 1}`} className="w-full aspect-square object-cover" />
+                              <img
+                                src={src}
+                                alt={`Photo ${idx + 1}`}
+                                className="w-full aspect-square object-cover bg-slate-200"
+                                onError={e => { e.target.onerror = null; e.target.src = rawSrc; }}
+                              />
                               <div className="absolute top-1 right-1 flex gap-1">
-                                <button onClick={() => handleAnalyzeSinglePhoto(src, photo.date)} title="AI Full Scan & Log"
+                                <button onClick={() => handleAnalyzeSinglePhoto(rawSrc, photo.date)} title="AI Full Scan & Log"
                                   className="p-1.5 bg-purple-600/90 backdrop-blur rounded-lg text-white shadow">
                                   <Sparkles className="w-3 h-3" />
                                 </button>
@@ -2101,15 +2110,15 @@ Write a professional, concise narrative summary.`;
                               {photo.date && <p className="text-[10px] text-slate-400">{new Date(photo.date).toLocaleDateString()}</p>}
                             </div>
                             <div className="px-2 pb-2 flex gap-1 flex-wrap">
-                              <button onClick={() => identifyWeedFromPhoto(src)} title="AI Weed ID"
+                              <button onClick={() => identifyWeedFromPhoto(rawSrc)} title="AI Weed ID"
                                 className="flex items-center gap-1 px-2 py-1 text-[10px] font-semibold bg-emerald-50 text-emerald-700 rounded-lg hover:bg-emerald-100">
                                 <Leaf className="w-3 h-3" />Weed ID
                               </button>
-                              <button onClick={() => detectWeedCoverAI(src)} title="Detect Weed Cover"
+                              <button onClick={() => detectWeedCoverAI(rawSrc)} title="Detect Weed Cover"
                                 className="flex items-center gap-1 px-2 py-1 text-[10px] font-semibold bg-violet-50 text-violet-700 rounded-lg hover:bg-violet-100">
                                 <ScanLine className="w-3 h-3" />Cover
                               </button>
-                              <button onClick={() => handleCropExistingPhoto(idx, src)} title="Crop photo"
+                              <button onClick={() => handleCropExistingPhoto(idx, rawSrc)} title="Crop photo"
                                 className="flex items-center gap-1 px-2 py-1 text-[10px] font-semibold bg-slate-100 text-slate-700 rounded-lg hover:bg-slate-200">
                                 <Crop className="w-3 h-3" />Crop
                               </button>
@@ -2117,7 +2126,7 @@ Write a professional, concise narrative summary.`;
                                 className="flex items-center gap-1 px-2 py-1 text-[10px] font-semibold bg-slate-100 text-slate-700 rounded-lg hover:bg-slate-200">
                                 <Pencil className="w-3 h-3" />Edit
                               </button>
-                              <button onClick={() => { const a = document.createElement('a'); a.href = src; a.download = photo.fileName || `photo-${idx+1}.jpg`; a.target = '_blank'; a.click(); }} title="Download"
+                              <button onClick={() => { const a = document.createElement('a'); a.href = rawSrc; a.download = photo.fileName || `photo-${idx+1}.jpg`; a.target = '_blank'; a.click(); }} title="Download"
                                 className="flex items-center gap-1 px-2 py-1 text-[10px] font-semibold bg-slate-100 text-slate-700 rounded-lg hover:bg-slate-200">
                                 <Download className="w-3 h-3" />
                               </button>
