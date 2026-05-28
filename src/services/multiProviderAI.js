@@ -203,6 +203,13 @@ function parseAIJson(text) {
   return JSON.parse(match[1] || match[0]);
 }
 
+// Extract Google Drive file ID from any Drive URL variant
+function getDriveFileId(url) {
+  if (typeof url !== 'string') return null;
+  const m = url.match(/drive\.google\.com\/(?:file\/d\/|open\?id=|uc\?(?:export=download&)?id=|thumbnail\?(?:[^&]*&)?id=)([a-zA-Z0-9_-]+)/);
+  return m ? m[1] : null;
+}
+
 function encodeImageViaCanvas(src) {
   return new Promise((resolve, reject) => {
     const img = new Image();
@@ -239,8 +246,13 @@ async function imageToBase64(dataUrlOrUrl) {
     return encodeImageViaCanvas(dataUrlOrUrl);
   }
 
-  // Remote URL: try fetch first (works for same-origin / CORS-enabled URLs)
-  // For Google Drive thumbnails and other CORS-restricted URLs, fall back to img element
+  // Google Drive URLs can NEVER be fetched from browser (CORS block + 302 redirect)
+  // Callers that need base64 (Groq, Pixtral) must skip Drive URLs upstream.
+  if (getDriveFileId(dataUrlOrUrl)) {
+    throw new Error('DRIVE_URL_NO_BASE64');
+  }
+
+  // Regular remote URL — try fetch
   try {
     const response = await fetch(dataUrlOrUrl, { mode: 'cors' });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
@@ -253,15 +265,21 @@ async function imageToBase64(dataUrlOrUrl) {
     });
     return encodeImageViaCanvas(dataUrl);
   } catch (fetchErr) {
-    // Fetch failed (CORS / Drive auth) — load via <img> element instead
     console.warn('[AI] fetch failed, trying img load:', fetchErr.message);
     return encodeImageViaCanvas(dataUrlOrUrl);
   }
 }
 
 async function callGemini(provider, imageData, context, apiKey) {
-  const base64 = await imageToBase64(imageData);
-  const mimeType = 'image/jpeg'; // always JPEG after canvas re-encode
+  // For Google Drive URLs: use fileUri — Gemini API reads Drive files server-side (no CORS issue)
+  const driveId = getDriveFileId(imageData);
+  let imagePart;
+  if (driveId) {
+    imagePart = { fileData: { mimeType: 'image/jpeg', fileUri: `https://drive.google.com/uc?export=download&id=${driveId}` } };
+  } else {
+    const base64 = await imageToBase64(imageData);
+    imagePart = { inlineData: { mimeType: 'image/jpeg', data: base64 } };
+  }
 
   const response = await fetch(`${provider.endpoint}?key=${apiKey}`, {
     method: 'POST',
@@ -270,7 +288,7 @@ async function callGemini(provider, imageData, context, apiKey) {
       contents: [{
         parts: [
           { text: buildPrompt(context) },
-          { inlineData: { mimeType, data: base64 } }
+          imagePart
         ]
       }]
     })
@@ -288,6 +306,12 @@ async function callGemini(provider, imageData, context, apiKey) {
 }
 
 async function callGroq(provider, imageData, context, apiKey) {
+  // Groq requires base64 — Drive URLs are CORS-blocked, skip immediately
+  if (getDriveFileId(imageData)) {
+    const e = new Error('Drive images cannot be fetched for Groq (CORS). Use Gemini instead.');
+    e.status = 400;
+    throw e;
+  }
   const base64 = await imageToBase64(imageData);
   const response = await fetch(provider.endpoint, {
     method: 'POST',
@@ -321,6 +345,12 @@ async function callGroq(provider, imageData, context, apiKey) {
 }
 
 async function callPixtral(provider, imageData, context, apiKey) {
+  // Pixtral requires base64 — Drive URLs are CORS-blocked, skip immediately
+  if (getDriveFileId(imageData)) {
+    const e = new Error('Drive images cannot be fetched for Pixtral (CORS). Use Gemini instead.');
+    e.status = 400;
+    throw e;
+  }
   const base64 = await imageToBase64(imageData);
   const response = await fetch(provider.endpoint, {
     method: 'POST',
@@ -371,7 +401,13 @@ function isNonRetryable(err) {
   const msg = err.message || '';
   if (msg.includes('Unable to process input image')) return true;
   if (msg.includes('Invalid API Key') || msg.includes('invalid_api_key')) return true;
+  if (msg.includes('DRIVE_URL_NO_BASE64') || msg.includes('Drive images cannot be fetched')) return true;
   return false;
+}
+
+function isDriveSkip(err) {
+  const msg = err.message || '';
+  return msg.includes('DRIVE_URL_NO_BASE64') || msg.includes('Drive images cannot be fetched');
 }
 
 // 429 = quota exceeded for this key, skip to next key but don't retry
@@ -400,12 +436,10 @@ export async function analyzePhoto(imageData, context = {}, onProgress = null) {
         } catch (err) {
           console.warn(`[AI] ${provider.name} key ${ki + 1} attempt ${attempt} failed:`, err.message);
           if (isNonRetryable(err)) {
-            // 400 bad image — no point trying other keys or attempts for this provider
-            if (err.status === 400 || (err.message || '').includes('Unable to process input image')) {
+            if (!isDriveSkip(err) && (err.status === 400 || (err.message || '').includes('Unable to process input image'))) {
               imageErrorCount++;
-              break; // skip to next provider
             }
-            break; // 401/403 — bad key, skip remaining attempts for this key
+            break; // skip to next provider/key
           }
           if (isQuotaError(err)) break; // 429 — skip this key, try next
           if (attempt < 2) await delay(2000);
