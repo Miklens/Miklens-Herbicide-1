@@ -1591,7 +1591,8 @@ LANGUAGE AND TONE RULES — follow strictly:
 4. Do NOT use any markdown formatting (no **, no *, no #, no bullet dashes, no hyphens as bullets). Plain text only.
 5. Section headings as plain numbered text: "1. Application & Setup" on its own line.
 6. SPECIES HEADING RULE: Each species heading must be written as "Common Name (Scientific Name)" — e.g. "Bermuda Grass (Cynodon dactylon)". NEVER write the same name twice like "Cynodon dactylon (Cynodon dactylon)". If no common name is known, write only the scientific name. Use the common names from the target weed field or weed details if available.
-7. Application date must be formatted as DD-Mon-YYYY (e.g. 19-Apr-2026). Dosage units: write "mL" not "ml". Write coordinates as provided.
+6a. SCIENTIFIC NAME CAPITALISATION: Always format scientific names as "Genus species" — Genus is capitalised, species epithet is fully lowercase. E.g. "Medicago polymorpha" not "medicago Polymorpha" or "Medicago Polymorpha".
+7. Application date must be formatted as DD-Mon-YYYY (e.g. 19-Apr-2026). Dosage units: write "mL" not "ml". Write coordinates as provided. Use "at coordinates X, Y" — never "at location X, Y".
 8. Do NOT use the word "phytotoxic" or "phytotoxicity". Use "herbicidal injury symptoms" instead.
 9. Write in third person. Past tense for finalized trials, present tense for ongoing.
 10. Do NOT include a Recommendation or Conclusion section.
@@ -1619,7 +1620,7 @@ For EACH species in the per-species breakdown — write the species heading (Com
 4. Control Duration Interpretation
 Exactly 2 sentences. Follow this structure:
 - Sentence 1: "The [last DAA]-day observation period revealed no measurable reduction in weed cover across all evaluated species." (observation period = last DAA number exactly, not +1)
-- Sentence 2: "Treatment performance was categorized as [Poor/Fair/Good/Excellent], indicating insufficient weed control performance under the evaluated field conditions."`;
+- Sentence 2: "Treatment performance was classified as [Poor/Fair/Good/Excellent], indicating insufficient weed control performance under the evaluated field conditions."`;
 
 
       // Use first available Gemini model (try 2.5-flash as reliable stable model)
